@@ -43,6 +43,7 @@ class DifferentialResult:
     violations: list[Violation] = field(default_factory=list)
     tokens_compared: int = 0
     tokens_undecidable: int = 0
+    vocabulary_covered: bool = True
 
     @property
     def ok(self) -> bool:
@@ -55,8 +56,14 @@ def check_differential(
     instance: str,
     tokenizer_id: str,
     max_examples: int = 8,
+    candidates: list[int] | None = None,
 ) -> DifferentialResult:
     """Compare engine and reference masks along the canonical tokenization.
+
+    Scans the whole vocabulary by default, which is the point: a sampled scan can
+    only ever lower-bound the disagreement. ``candidates`` restricts the scan, and
+    the result then carries ``vocabulary_covered=False`` so a report built from it
+    cannot silently claim full coverage.
 
     Raises :class:`Unsupported` if the reference cannot handle the schema at all;
     that is a capability gap for the caller to record, not a finding.
@@ -65,8 +72,9 @@ def check_differential(
     reference = Reference(schema)
     texts = tok.token_texts
     token_ids = tok.encode(instance)
+    scan = list(range(len(texts))) if candidates is None else list(candidates)
 
-    result = DifferentialResult()
+    result = DifferentialResult(vocabulary_covered=candidates is None)
     matcher = engine.compile(schema, tokenizer_id)
     prefix = ""
 
@@ -74,7 +82,8 @@ def check_differential(
         engine_allowed = matcher.allowed_mask()
         diff = StepDiff(step=step, prefix=prefix)
 
-        for candidate, text in enumerate(texts):
+        for candidate in scan:
+            text = texts[candidate]
             if text is None:
                 result.tokens_undecidable += 1
                 continue
@@ -85,6 +94,8 @@ def check_differential(
                 continue
             result.tokens_compared += 1
             in_engine = candidate in engine_allowed
+            # Both directions matter and they are different bugs, so neither is
+            # collapsed into the other.
             if in_engine and not viable:
                 diff.engine_only.append(candidate)
             elif viable and not in_engine:
