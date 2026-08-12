@@ -94,6 +94,29 @@ def test_restricted_scan_is_marked_as_not_covering_the_vocabulary(candidates):
     assert partial.vocabulary_covered is False
 
 
+def test_step_prefixes_are_real_prefixes_of_the_instance(candidates):
+    """Regression: in byte-level BPE a multi-byte character is split across tokens.
+
+    Concatenating each token's own text turns `{"s":"日本語"}` into `{"s":"������"}`,
+    and every comparison after the first split character is then made against a string
+    that appears nowhere in the language. Steps landing mid-character must be skipped,
+    and the ones that are compared must use a genuine prefix.
+    """
+    from fuzzer.engines.xgrammar import XGrammarAdapter
+
+    case = BY_ID["unicode_values"]
+    instance = '{"s":"日本語"}'
+    assert instance in case.instances
+    result = check_differential(
+        XGrammarAdapter(), case.schema, instance, TOKENIZER, candidates=candidates
+    )
+    assert result.steps, "no step was comparable"
+    for step in result.steps:
+        assert instance.startswith(step.prefix), f"step {step.step}: {step.prefix!r}"
+        assert "�" not in step.prefix
+    assert result.tokens_undecidable > 0, "the split characters should have been skipped"
+
+
 def test_real_engine_agrees_on_the_baseline_case(candidates):
     """The counterpart to the mocks: no false alarms on a case known to be clean."""
     from fuzzer.engines.xgrammar import XGrammarAdapter

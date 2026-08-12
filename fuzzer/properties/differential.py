@@ -76,9 +76,21 @@ def check_differential(
 
     result = DifferentialResult(vocabulary_covered=candidates is None)
     matcher = engine.compile(schema, tokenizer_id)
-    prefix = ""
 
     for step, token_id in enumerate([*token_ids, None]):
+        # Decode the whole sequence rather than concatenating per-token text: in
+        # byte-level BPE a multi-byte character is split across tokens, and neither
+        # piece decodes on its own. Summing the pieces would build a prefix full of
+        # U+FFFD and every comparison after it would be against the wrong string.
+        prefix = tok.decode(token_ids[:step])
+        if "�" in prefix:
+            # The prefix itself lands mid-character, so a string-level oracle cannot
+            # judge this step at all. Skip it rather than compare against mojibake.
+            result.tokens_undecidable += len(scan)
+            if token_id is None or not matcher.accept(token_id):
+                break
+            continue
+
         engine_allowed = matcher.allowed_mask()
         diff = StepDiff(step=step, prefix=prefix)
 
@@ -111,7 +123,6 @@ def check_differential(
             break
         if not matcher.accept(token_id):
             break
-        prefix += texts[token_id] or tok.decode_token(token_id)
 
     return result
 
