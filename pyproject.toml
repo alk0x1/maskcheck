@@ -1,0 +1,29 @@
+[project]
+name = "conformance-fuzzer"
+version = "0.1.0"
+description = "Differential conformance fuzzer for constrained-decoding engines"
+requires-python = ">=3.12"
+dependencies = [
+    "xgrammar>=0.1.18",
+    "transformers>=4.44",
+    "torch>=2.4",
+    "jsonschema>=4.23",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
+
+[tool.uv]
+package = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["fuzzer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
