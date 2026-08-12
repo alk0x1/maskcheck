@@ -28,8 +28,13 @@ Against **xgrammar 0.2.3**. Each file in `findings/` runs standalone with only
 | [002](findings/002_xgrammar_integer_zero_fractional_part.py) | `1.0`, `1e2`, `0.0` unreachable for `{"type":"integer"}` | Low | Spec-dependent |
 | [003](findings/003_xgrammar_carriage_return_whitespace.py) | Carriage return not accepted as JSON whitespace | **Medium** | Unambiguous |
 | [004](findings/004_xgrammar_property_order_default.py) | Only one property ordering reachable by default | Medium | Documented knob |
+| [005](findings/005_xgrammar_escaped_fixed_strings.py) | `\uXXXX` spellings of keys, enums and consts unreachable | Medium | Unambiguous |
+| [006](findings/006_xgrammar_bounded_number_exponents.py) | Numeric bounds make exponent spellings unreachable | Low | Unambiguous |
 
-All four are character-level, so they are tokenizer-independent.
+All six are character-level, so they are tokenizer-independent. Full sweep numbers are
+in [reports/m1_xgrammar_gpt2.md](reports/m1_xgrammar_gpt2.md): 58 instances, full
+vocabulary scanned at every step, **zero soundness violations**, 88 completeness
+records collapsing to these six causes.
 
 **003 is the one that matters most.** RFC 8259 defines exactly four whitespace
 characters: space, tab, LF, CR. XGrammar accepts three and rejects CR at every
@@ -41,6 +46,12 @@ but `n! - 1` of the `n!` valid key orderings cannot be generated and the output
 distribution is skewed toward the schema author's declaration order. It is a documented
 default (`any_order=False`) rather than a bug, and a caller who never reads that doc has
 no way to notice.
+
+**005 is more realistic than it first looks.** `"\u0061"` and `"a"` are the
+same JSON string, and Python's `json.dumps` escapes non-ASCII *by default*
+(`ensure_ascii=True`), so a large share of public JSON spells `é` as
+`\u00e9`. A model that learned that convention will be blocked mid-string on any
+schema with a non-ASCII key or enum value.
 
 Not yet filed upstream (M4).
 
@@ -110,8 +121,8 @@ distinct failures.
   end to end. GPT-2 spells `{"a":"x"}` as `{"` `a` `":"` `x` `"}`, so even the baseline
   case exercises boundary-spanning tokens.
 - **M1 — reference oracle.** Done. Reference validator and acceptor, 23-case handwritten
-  corpus, differential driver. Every remaining disagreement between the reference and
-  XGrammar is understood and filed as 001-004.
+  corpus, differential driver. Every disagreement between the reference and XGrammar is
+  understood and filed as 001-006, with no unexplained residue.
 - **M2 — generators.** Not started. Random schemas via Hypothesis, valid instance
   generation, shrinking.
 - **M3 — the sweep.** Not started. All engines, all tokenizers, all three properties.
