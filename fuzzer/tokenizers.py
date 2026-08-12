@@ -50,6 +50,31 @@ class Tokenizer:
     def decode_token(self, token_id: int) -> str:
         return self.hf.decode([token_id], skip_special_tokens=False)
 
+    @functools.cached_property
+    def token_texts(self) -> list[str | None]:
+        """Per-token text, or None where the token is not comparable as text.
+
+        Two kinds of token are excluded, and both exclusions are counted by callers
+        rather than hidden:
+
+        - Special tokens. ``decode`` renders them as their literal spelling
+          (``<|endoftext|>``), which is not text the model is emitting into the JSON.
+        - Byte-level fragments. In byte-level BPE a multi-byte character can be split
+          across two tokens, so neither piece is valid UTF-8 on its own and ``decode``
+          returns U+FFFD. A string-level oracle cannot judge those; a byte-level one
+          could, and that is a known limitation of this harness rather than a
+          property of the engines.
+        """
+        special = set(self.hf.all_special_ids)
+        texts: list[str | None] = []
+        for token_id in range(self.vocab_size):
+            if token_id in special:
+                texts.append(None)
+                continue
+            text = self.decode_token(token_id)
+            texts.append(None if "�" in text else text)
+        return texts
+
 
 @functools.lru_cache(maxsize=None)
 def load_tokenizer(short_id: str) -> Tokenizer:
