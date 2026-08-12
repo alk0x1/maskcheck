@@ -227,32 +227,58 @@ class Reference:
         # digit, and `1` needs another one when the schema says minimum 10.
         tail = text[pos:]
         if _NUMBER_PREFIX_RE.fullmatch(tail):
-            for completion in self._number_completions(schema, tail):
+            completion = self._number_completion(schema, tail)
+            if completion is not None:
                 yield Open(completion)
-                return  # one witness is enough
 
-    def _number_completions(
-        self, schema: dict, tail: str, max_extra: int = 4
-    ) -> Iterator[str]:
-        """Shortest-first search for a suffix making ``tail`` a valid number.
+    def _number_completion(
+        self, schema: dict, tail: str, max_extra: int = 4, max_nodes: int = 4096
+    ) -> str | None:
+        """Shortest suffix making ``tail`` a valid number, or None if there is none.
 
         Breadth-first over digits and exponent punctuation, pruned to strings that are
-        still plausibly a number prefix. Bounded by ``max_extra``, so a schema whose
-        only satisfying numbers are long (``minimum: 100000``) yields nothing and the
-        caller reports non-viability. That bound is the honest limit of this oracle.
+        still plausibly a number prefix, so the usual one- or two-character witness is
+        found almost immediately and unbounded numeric schemas cost nothing.
+
+        The two ways of failing are not the same and are not conflated:
+
+        - The tree was fully explored because pruning killed every branch. No number
+          has this prefix at all, so None is a definite answer.
+        - A branch was cut off by ``max_extra`` or ``max_nodes``. Then the answer is
+          unknown, because a bound like ``minimum: 100000`` needs a longer suffix and
+          an exponent can move a number in either direction, so no cheap monotonicity
+          argument closes the gap. That raises :class:`Unsupported`, since reporting
+          non-viability here would turn an oracle limitation into a phantom violation
+          against the engine.
         """
         queue: list[str] = [""]
+        nodes = 0
+        truncated = False
         while queue:
             extra = queue.pop(0)
+            nodes += 1
+            if nodes > max_nodes:
+                raise Unsupported(
+                    f"numeric completion search for {tail!r} exceeded {max_nodes} nodes"
+                )
             candidate = tail + extra
             if extra and _NUMBER_RE.fullmatch(candidate) and self._number_ok(schema, candidate):
-                yield extra
+                return extra
+            children = [
+                extra + ch
+                for ch in _NUMBER_CHARS
+                if _NUMBER_PREFIX_RE.fullmatch(tail + extra + ch)
+            ]
             if len(extra) < max_extra:
-                queue.extend(
-                    extra + ch
-                    for ch in _NUMBER_CHARS
-                    if _NUMBER_PREFIX_RE.fullmatch(tail + extra + ch)
-                )
+                queue.extend(children)
+            elif children:
+                truncated = True
+
+        if truncated:
+            raise Unsupported(
+                f"no numeric completion for {tail!r} within {max_extra} extra characters"
+            )
+        return None
 
     def _number_ok(self, schema: dict, literal: str) -> bool:
         try:

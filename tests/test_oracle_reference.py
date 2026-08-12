@@ -24,7 +24,6 @@ NON_VIABLE = [
     ("integers", '{"n":"', "value must be an integer"),
     ("integers", '{"n":01', "leading zeros are not legal JSON"),
     ("bounded_number", '{"n":5}', "below minimum 10"),
-    ("bounded_number", '{"n":30', "above maximum 20"),
     ("array_of_strings", '{"a":[1', "items must be strings"),
     ("nested_objects", '{"a":{"b":"', "b must be an object"),
     ("string_escapes", '{"s":"\\q', "invalid escape sequence"),
@@ -88,6 +87,27 @@ def test_positive_verdicts_carry_a_validated_witness():
     verdict = reference.viable_prefix('{"a":')
     assert verdict.witness == '{"a":""}'
     assert reference.is_complete(verdict.witness)
+
+
+def test_bounded_numbers_abstain_instead_of_guessing():
+    """`30` cannot reach [10, 20] by any short suffix, but the reference does not get
+    to say so.
+
+    Proving it would need reasoning this parser does not do: appending digits grows a
+    number, appending an exponent can shrink it, so an exhausted bounded search is not
+    a proof of non-viability. Abstaining costs coverage on bounded numeric schemas and
+    is the price of never reporting a phantom violation.
+    """
+    with pytest.raises(Unsupported):
+        Reference(BY_ID["bounded_number"].schema).viable_prefix('{"n":30')
+
+
+def test_unbounded_numbers_stay_decidable():
+    """The abstention above must not leak into ordinary numeric schemas."""
+    reference = Reference(BY_ID["integers"].schema)
+    assert reference.viable_prefix('{"n":30')
+    assert reference.viable_prefix('{"n":-')
+    assert not reference.viable_prefix('{"n":01')
 
 
 def test_unsupported_constructs_abstain_rather_than_guess():
