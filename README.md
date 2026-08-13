@@ -19,8 +19,9 @@ Completeness is the interesting one, and every finding so far is a completeness 
 
 ## Findings
 
-Against **xgrammar 0.2.3**. Each file in `findings/` runs standalone with only
-`xgrammar` and `jsonschema` installed.
+Originally found against **xgrammar 0.2.3**. All six standalone reproducers still
+reproduce on the latest stable `0.2.5` wheel and on post-compiler-rewrite `main` at
+`ba00e8bd4d85be96a2fe8cdc561cb08bed899db6`.
 
 | # | Finding | Severity | Confidence |
 |---|---|---|---|
@@ -30,6 +31,16 @@ Against **xgrammar 0.2.3**. Each file in `findings/` runs standalone with only
 | [004](findings/004_xgrammar_property_order_default.py) | Only one property ordering reachable by default | Medium | Documented knob |
 | [005](findings/005_xgrammar_escaped_fixed_strings.py) | `\uXXXX` spellings of keys, enums and consts unreachable | Medium | Unambiguous |
 | [006](findings/006_xgrammar_bounded_number_exponents.py) | Numeric bounds make exponent spellings unreachable | Low | Unambiguous |
+
+M3 has now reproduced 006 independently in **llguidance 1.8.0**: `1e1` is reachable
+for an unbounded number and rejected as soon as `minimum: 10` is added. This is one
+shared modeling failure, not two engine-specific root causes. Both compilers constrain
+the decimal spelling instead of the numeric value represented by that spelling.
+
+M3 also found a soundness disagreement in **outlines-core 0.2.14**. Schemas containing
+standard numeric value constraints such as `minimum` or `maximum` compile successfully,
+but the generated regex is identical to the unbounded type and accepts out-of-range
+values. This is silent constraint omission, not a compilation or capability gap.
 
 All six are character-level, so they are tokenizer-independent. Full sweep numbers are
 in [reports/m1_xgrammar_gpt2.md](reports/m1_xgrammar_gpt2.md): 58 instances, full
@@ -60,6 +71,7 @@ Not yet filed upstream (M4).
 ```bash
 uv sync
 uv run pytest                       # the harness's own tests
+uv run pytest tests/test_m2_generators.py  # 10k generated-pair exit verifier
 uv run python findings/003_*.py     # any single reproducer, standalone
 ```
 
@@ -70,6 +82,9 @@ fuzzer/
   engines/        one adapter per engine behind a uniform interface
     base.py       EngineAdapter / Matcher protocols, CapabilityGap
     xgrammar.py
+  generators/
+    schemas.py    bounded Hypothesis strategy for supported JSON Schemas
+    instances.py compact valid instances and dependent schema-instance pairs
   oracle/
     validator.py  reference JSON Schema validation (character level)
     reference.py  reference token-level acceptor, deliberately slow, witness-certified
@@ -77,6 +92,7 @@ fuzzer/
     completeness.py   valid instance -> every token must be allowed
     differential.py   engine mask vs reference mask, at every step, both directions
   corpus.py       handwritten suite of token-boundary-stressing schemas
+  shrink.py       predicate-driven failure discovery and shrinking
   tokenizers.py   tokenizer registry and encode/decode conventions
   findings.py     Violation record
 findings/         standalone reproducers, one per distinct root cause
@@ -97,12 +113,12 @@ This caught two of my own mistakes while writing the tests. `{"n":1.5` looks dea
 fractional part. `{"a":"x","a` looks like a duplicate key until the oracle produces
 `{"a":"x","ab":"","abc":""}`.
 
-**Bounded numeric search abstains rather than concludes.** For `{"n":30` under
-`minimum: 10, maximum: 20`, appending digits grows a number and appending an exponent
-can shrink it, so an exhausted bounded search is not a proof of non-viability. The
-reference distinguishes "pruning killed every branch" (a definite answer) from "a branch
-was cut off by the bound" (raises `Unsupported`). This costs coverage on bounded numeric
-schemas and buys never reporting a phantom violation.
+**Bounded numeric prefixes are solved arithmetically.** A partial mantissa defines an
+exact decimal interval repeated at powers of ten, while a partial exponent defines a
+set of integer scales. The reference intersects those sets with `minimum` and `maximum`
+instead of exploring character suffixes. Positive answers still carry a witness that
+passes `jsonschema`; impossible prefixes such as `30` under `[10, 20]` are rejected
+without an arbitrary search cutoff.
 
 **Whitespace around the document is not reported.** RFC 8259 permits it, no engine
 allows it, and reporting it would bury the real findings under thousands of identical
@@ -117,16 +133,22 @@ distinct failures.
 
 ## Milestone status
 
-- **M0 — spine.** Done. XGrammar + GPT-2 + one hardcoded schema, completeness driver
+- **M0, spine.** Done. XGrammar + GPT-2 + one hardcoded schema, completeness driver
   end to end. GPT-2 spells `{"a":"x"}` as `{"` `a` `":"` `x` `"}`, so even the baseline
   case exercises boundary-spanning tokens.
-- **M1 — reference oracle.** Done. Reference validator and acceptor, 23-case handwritten
+- **M1, reference oracle.** Done. Reference validator and acceptor, 23-case handwritten
   corpus, differential driver. Every disagreement between the reference and XGrammar is
   understood and filed as 001-006, with no unexplained residue.
-- **M2 — generators.** Not started. Random schemas via Hypothesis, valid instance
-  generation, shrinking.
-- **M3 — the sweep.** Not started. All engines, all tokenizers, all three properties.
-- **M4 — disclosure.** Not started.
+- **M2, generators.** Done. Hypothesis schema and compact-instance strategies,
+  dependent pair generation, and predicate-driven shrinking. The exit sweep checked
+  10,000 pairs through schema validation, instance validation, every character prefix
+  of the reference oracle, and final completeness without a crash. An injected escaped
+  fixed-string bug shrinks to a two-line case. Full details are in
+  [reports/m2_generators.md](reports/m2_generators.md).
+- **M3, the sweep.** In progress. All three engines and all four tokenizers are wired;
+  the three property drivers pass their end-to-end contract tests. The long matrix run
+  and root-cause classification remain.
+- **M4, disclosure.** Not started.
 
 ## Scope
 

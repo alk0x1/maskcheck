@@ -89,17 +89,77 @@ def test_positive_verdicts_carry_a_validated_witness():
     assert reference.is_complete(verdict.witness)
 
 
-def test_bounded_numbers_abstain_instead_of_guessing():
-    """`30` cannot reach [10, 20] by any short suffix, but the reference does not get
-    to say so.
+@pytest.mark.parametrize(
+    "prefix,expected",
+    [
+        ('{"n":0', True),
+        ('{"n":1', True),
+        ('{"n":1.', True),
+        ('{"n":1e', True),
+        ('{"n":3', False),
+        ('{"n":30', False),
+        ('{"n":1e-', False),
+    ],
+)
+def test_bounded_number_prefixes_are_decided_arithmetically(prefix, expected):
+    """Numeric bounds are decided without a bounded character search."""
+    reference = Reference(BY_ID["bounded_number"].schema)
+    verdict = reference.viable_prefix(prefix)
+    assert bool(verdict) is expected
+    if verdict:
+        assert verdict.witness.startswith(prefix)
+        assert reference.is_complete(verdict.witness)
 
-    Proving it would need reasoning this parser does not do: appending digits grows a
-    number, appending an exponent can shrink it, so an exhausted bounded search is not
-    a proof of non-viability. Abstaining costs coverage on bounded numeric schemas and
-    is the price of never reporting a phantom violation.
-    """
-    with pytest.raises(Unsupported):
-        Reference(BY_ID["bounded_number"].schema).viable_prefix('{"n":30')
+
+@pytest.mark.parametrize(
+    "schema,prefix,expected",
+    [
+        ({"type": "integer", "minimum": -20, "maximum": -10}, "-", True),
+        ({"type": "integer", "minimum": -20, "maximum": -10}, "-0", True),
+        ({"type": "integer", "minimum": -20, "maximum": -10}, "-10.", True),
+        ({"type": "integer", "minimum": -20, "maximum": -10}, "-3", False),
+        ({"type": "integer", "maximum": -1.8}, "-1", True),
+        ({"type": "integer", "minimum": 0, "maximum": 0}, "1", False),
+        ({"type": "number", "minimum": 1.25, "maximum": 1.5}, "1.2", True),
+        ({"type": "number", "minimum": 1.25, "maximum": 1.5}, "1.6", False),
+        ({"type": "integer", "minimum": 10, "maximum": 20}, "1e+", True),
+        ({"type": "integer", "minimum": 10, "maximum": 20}, "1e0", True),
+        ({"type": "integer", "minimum": 10, "maximum": 20}, "1e2", False),
+        ({"type": "integer", "minimum": 10, "maximum": 20}, "100e-", True),
+    ],
+)
+def test_bounded_number_arithmetic_handles_sign_fraction_and_exponent(
+    schema, prefix, expected
+):
+    reference = Reference(schema)
+    verdict = reference.viable_prefix(prefix)
+    assert bool(verdict) is expected
+    if verdict:
+        assert verdict.witness.startswith(prefix)
+        assert reference.is_complete(verdict.witness)
+
+
+def test_fractional_minimum_builds_an_integer_witness_for_an_empty_prefix():
+    reference = Reference({"type": "integer", "minimum": -1.5, "maximum": 1.5})
+    verdict = reference.viable_prefix("")
+    assert verdict.witness == "0"
+    assert reference.is_complete(verdict.witness)
+
+
+@pytest.mark.parametrize(
+    "schema,expected",
+    [
+        ({"type": "integer", "maximum": -10}, "-10"),
+        ({"type": "number", "maximum": -10.5}, "-10.5"),
+    ],
+)
+def test_negative_maximum_builds_a_numeric_witness_for_an_empty_prefix(
+    schema, expected
+):
+    reference = Reference(schema)
+    verdict = reference.viable_prefix("")
+    assert verdict.witness == expected
+    assert reference.is_complete(verdict.witness)
 
 
 def test_unbounded_numbers_stay_decidable():
@@ -130,3 +190,12 @@ def test_interior_whitespace_is_always_viable():
     reference = Reference(BY_ID["single_string_field"].schema)
     for ws in [" ", "\t", "\n", "\r"]:
         assert reference.viable_prefix('{"a":' + ws), f"{ws!r} is RFC 8259 whitespace"
+
+
+def test_prefix_inside_a_unicode_surrogate_pair_remains_viable():
+    schema = {"type": "string", "minLength": 4}
+    prefix = r'"00\ud83d\ude'
+    verdict = Reference(schema).viable_prefix(prefix)
+    assert verdict
+    assert verdict.witness.startswith(prefix)
+    assert Reference(schema).is_complete(verdict.witness)

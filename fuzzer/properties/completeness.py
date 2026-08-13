@@ -28,6 +28,31 @@ class CompletenessResult:
         return not self.violations
 
 
+@dataclass
+class MultiTokenizationResult:
+    canonical: CompletenessResult
+    alternatives: list[CompletenessResult]
+
+    @property
+    def all_results(self) -> list[CompletenessResult]:
+        return [self.canonical, *self.alternatives]
+
+    @property
+    def any_tokenization_accepted(self) -> bool:
+        return any(result.ok for result in self.all_results)
+
+    @property
+    def canonical_failed_with_accepted_alternative(self) -> bool:
+        return not self.canonical.ok and any(
+            result.ok for result in self.alternatives
+        )
+
+    @property
+    def ok(self) -> bool:
+        """Canonical rejection remains a user-impacting completeness failure."""
+        return self.canonical.ok
+
+
 def check_completeness(
     engine: EngineAdapter,
     schema: dict,
@@ -103,3 +128,27 @@ def check_completeness(
         )
 
     return result
+
+
+def check_completeness_variants(
+    engine: EngineAdapter,
+    schema: dict,
+    instance: str,
+    tokenizer_id: str,
+    *,
+    max_alternatives: int = 8,
+) -> MultiTokenizationResult:
+    """Check canonical and bounded alternate exact-roundtrip tokenizations."""
+    tok = load_tokenizer(tokenizer_id)
+    tokenizations = tok.tokenizations(instance, max_alternatives=max_alternatives)
+    results = [
+        check_completeness(
+            engine,
+            schema,
+            instance,
+            tokenizer_id,
+            token_ids=token_ids,
+        )
+        for token_ids in tokenizations
+    ]
+    return MultiTokenizationResult(canonical=results[0], alternatives=results[1:])

@@ -13,7 +13,17 @@ from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 # Short id -> HF repo. Short ids appear in reproducers, so treat them as an API.
 REGISTRY: dict[str, str] = {
-    "gpt2": "gpt2",
+    "gpt2": "openai-community/gpt2",
+    "qwen2.5": "Qwen/Qwen2.5-0.5B-Instruct",
+    "mistral": "mistralai/Mistral-7B-v0.1",
+    "llama3": "Xenova/llama3-tokenizer",
+}
+
+REVISIONS: dict[str, str] = {
+    "gpt2": "607a30d783dfa663caf39e06633721c8d4cfcd7e",
+    "qwen2.5": "7ae557604adf67be50417f59c2c2f167def9a775",
+    "mistral": "27d67f1b5f57dc0953326b2601d68371d40ea8da",
+    "llama3": "72bff9ee09897a16b3b4b2b9995fecb0bfa7dbe6",
 }
 
 
@@ -50,6 +60,53 @@ class Tokenizer:
     def decode_token(self, token_id: int) -> str:
         return self.hf.decode([token_id], skip_special_tokens=False)
 
+    def has_start_context_mismatch(self, text: str) -> bool:
+        """Whether preceding model context changes the decoded generated text.
+
+        SentencePiece/metaspace tokenizers can strip an initial word-boundary marker
+        only when generated IDs are decoded in isolation. The same IDs after BOS then
+        decode differently, so a standalone canonical tokenization is not enough to
+        define model-generation behavior.
+        """
+        ids = self.encode(text)
+        context_ids = self.encode("x")
+        context = self.decode(context_ids)
+        combined = self.hf.decode(
+            [*context_ids, *ids],
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        )
+        return not combined.startswith(context) or combined[len(context) :] != text
+
+    def tokenizations(self, text: str, max_alternatives: int = 8) -> list[list[int]]:
+        """Canonical encoding followed by bounded exact-roundtrip alternatives.
+
+        Alternatives use tokens that decode to complete text in isolation. Byte
+        fragments remain outside this string-level enumeration and are accounted for
+        separately by the differential driver.
+        """
+        if max_alternatives < 0:
+            raise ValueError("max_alternatives must be non-negative")
+        canonical = self.encode(text)
+        output = [canonical]
+        seen = {tuple(canonical)}
+        if max_alternatives == 0 or not text:
+            return output
+
+        stack: list[tuple[int, tuple[int, ...]]] = [(0, ())]
+        while stack and len(output) <= max_alternatives:
+            position, path = stack.pop()
+            if position == len(text):
+                if path not in seen and self.decode(list(path)) == text:
+                    seen.add(path)
+                    output.append(list(path))
+                continue
+            choices = self._tokens_by_initial.get(text[position], ())
+            for piece, token_id in reversed(choices):
+                if text.startswith(piece, position):
+                    stack.append((position + len(piece), path + (token_id,)))
+        return output
+
     @functools.cached_property
     def token_texts(self) -> list[str | None]:
         """Per-token text, or None where the token is not comparable as text.
@@ -75,6 +132,17 @@ class Tokenizer:
             texts.append(None if "�" in text else text)
         return texts
 
+    @functools.cached_property
+    def _tokens_by_initial(self) -> dict[str, tuple[tuple[str, int], ...]]:
+        grouped: dict[str, list[tuple[str, int]]] = {}
+        for token_id, piece in enumerate(self.token_texts):
+            if piece:
+                grouped.setdefault(piece[0], []).append((piece, token_id))
+        return {
+            initial: tuple(sorted(entries, key=lambda item: (-len(item[0]), item[1])))
+            for initial, entries in grouped.items()
+        }
+
 
 @functools.lru_cache(maxsize=None)
 def load_tokenizer(short_id: str) -> Tokenizer:
@@ -85,4 +153,7 @@ def load_tokenizer(short_id: str) -> Tokenizer:
         raise KeyError(
             f"unknown tokenizer {short_id!r}; registered: {sorted(REGISTRY)}"
         ) from None
-    return Tokenizer(short_id, AutoTokenizer.from_pretrained(repo))
+    return Tokenizer(
+        short_id,
+        AutoTokenizer.from_pretrained(repo, revision=REVISIONS[short_id]),
+    )

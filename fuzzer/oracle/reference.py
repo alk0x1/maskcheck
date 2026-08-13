@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR, localcontext
 from typing import Any, Iterator
 
 from fuzzer.oracle.validator import validate_text
@@ -53,6 +54,11 @@ _NUMBER_RE = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
 # Deliberately loose: this only prunes the completion search, so over-approximating
 # costs time while under-approximating would lose witnesses. Err loose.
 _NUMBER_PREFIX_RE = re.compile(r"-?(?:0|[1-9][0-9]*)?(?:\.[0-9]*)?(?:[eE][+-]?[0-9]*)?")
+_NUMBER_PARTS_RE = re.compile(
+    r"(?P<sign>-?)(?P<integer>0|[1-9][0-9]*)"
+    r"(?:\.(?P<fraction>[0-9]*))?"
+    r"(?:(?P<marker>[eE])(?P<exponent_sign>[+-]?)(?P<exponent>[0-9]*))?"
+)
 _NUMBER_CHARS = "0123456789.eE+-"
 _WS = " \t\n\r"
 
@@ -208,7 +214,17 @@ class Reference:
                     # Text ended inside the escape; `esc` finishes it.
                     yield Open(esc + _pad(min_len - n_chars - 1) + '"')
                     return
-                i = esc
+                codepoint = _unicode_escape_codepoint(text, i)
+                if codepoint is not None and 0xD800 <= codepoint <= 0xDBFF:
+                    low = _low_surrogate_tail(text, esc)
+                    if isinstance(low, str):
+                        # A surrogate pair is one Unicode character, even though its
+                        # JSON spelling contains two escapes.
+                        yield Open(low + _pad(min_len - n_chars - 1) + '"')
+                        return
+                    i = low if isinstance(low, int) else esc
+                else:
+                    i = esc
             elif c in "\x00\x1f":
                 return  # control characters must be escaped in JSON strings
             else:
@@ -236,21 +252,25 @@ class Reference:
     ) -> str | None:
         """Shortest suffix making ``tail`` a valid number, or None if there is none.
 
+        Inclusive minimum and maximum bounds are solved with exact decimal interval
+        arithmetic. The character search remains only for unbounded schemas, where it
+        normally finds a witness in one or two nodes.
+
         Breadth-first over digits and exponent punctuation, pruned to strings that are
         still plausibly a number prefix, so the usual one- or two-character witness is
         found almost immediately and unbounded numeric schemas cost nothing.
 
-        The two ways of failing are not the same and are not conflated:
+        The two ways the fallback search can fail are not conflated:
 
         - The tree was fully explored because pruning killed every branch. No number
           has this prefix at all, so None is a definite answer.
         - A branch was cut off by ``max_extra`` or ``max_nodes``. Then the answer is
-          unknown, because a bound like ``minimum: 100000`` needs a longer suffix and
-          an exponent can move a number in either direction, so no cheap monotonicity
-          argument closes the gap. That raises :class:`Unsupported`, since reporting
-          non-viability here would turn an oracle limitation into a phantom violation
-          against the engine.
+          unknown. That raises :class:`Unsupported`, since reporting non-viability
+          would turn an oracle limitation into a phantom violation against the engine.
         """
+        if "minimum" in schema or "maximum" in schema:
+            return self._bounded_number_completion(schema, tail)
+
         queue: list[str] = [""]
         nodes = 0
         truncated = False
@@ -280,12 +300,215 @@ class Reference:
             )
         return None
 
+    def _bounded_number_completion(self, schema: dict, tail: str) -> str | None:
+        """Decide a bounded numeric prefix and construct a witness when viable."""
+        parts = _NUMBER_PARTS_RE.fullmatch(tail)
+        if parts is None and tail != "-":
+            return None
+
+        precision = max(
+            50,
+            len(tail) * 2,
+            *(len(str(schema[key])) * 2 for key in ("minimum", "maximum") if key in schema),
+        )
+        with localcontext() as context:
+            context.prec = precision
+            bounds = _magnitude_bounds(schema, negative=tail.startswith("-"))
+            if bounds is None:
+                return None
+            lower, upper = bounds
+
+            if parts is not None and parts["marker"] is not None:
+                completion = self._bounded_exponent_completion(
+                    schema, tail, parts, lower, upper
+                )
+            else:
+                completion = self._bounded_mantissa_completion(
+                    schema, tail, parts, lower, upper
+                )
+
+        if completion is None:
+            return None
+        literal = tail + completion
+        if not _NUMBER_RE.fullmatch(literal) or not self._number_ok(schema, literal):
+            raise Unsupported(f"arithmetic numeric witness {literal!r} did not validate")
+        return completion
+
+    def _bounded_mantissa_completion(
+        self,
+        schema: dict,
+        tail: str,
+        parts: re.Match[str] | None,
+        lower: Decimal,
+        upper: Decimal | None,
+    ) -> str | None:
+        integer_only = schema.get("type") == "integer"
+
+        if tail == "-":
+            magnitude = _pick_decimal(lower, upper, integer_only)
+            if magnitude is None:
+                return None
+            literal = "-" + _decimal_text(magnitude)
+            return literal[len(tail) :]
+
+        assert parts is not None
+        negative = parts["sign"] == "-"
+        integer_text = parts["integer"]
+        fraction = parts["fraction"]
+        unsigned_prefix = tail[1:] if negative else tail
+        if fraction is None:
+            cell_lower = Decimal(integer_text)
+            cell_upper = cell_lower + 1
+        else:
+            cell_lower = Decimal(integer_text + "." + (fraction or "0"))
+            cell_upper = cell_lower + Decimal(1).scaleb(-len(fraction))
+
+        if cell_lower == 0:
+            if lower == 0:
+                magnitude = _pick_decimal(lower, upper, integer_only)
+                if magnitude == 0:
+                    mantissa = _mantissa_text(magnitude, unsigned_prefix)
+                    literal = ("-" if negative else "") + mantissa
+                    if not literal.startswith(tail):
+                        raise Unsupported(
+                            f"cannot preserve numeric prefix {tail!r} in {literal!r}"
+                        )
+                    return literal[len(tail) :]
+            magnitude = _pick_decimal(lower, upper, integer_only, positive=True)
+            if magnitude is None:
+                return None
+            exponent = magnitude.adjusted() - cell_upper.adjusted() + 1
+            while magnitude.scaleb(-exponent) >= cell_upper:
+                exponent += 1
+        else:
+            if upper is not None and upper <= 0:
+                return None
+            exponent_low = _smallest_scale_with_upper_above(cell_upper, lower)
+            exponent_high = (
+                _largest_scale_with_lower_at_most(cell_lower, upper)
+                if upper is not None
+                else None
+            )
+            if (
+                exponent_high is not None
+                and exponent_low is not None
+                and exponent_low > exponent_high
+            ):
+                return None
+
+            if integer_only:
+                integral_scale = -cell_lower.normalize().as_tuple().exponent
+                exponent = max(
+                    integral_scale,
+                    exponent_low if exponent_low is not None else integral_scale,
+                )
+            else:
+                exponent = 0
+                if exponent_low is not None:
+                    exponent = max(exponent, exponent_low)
+            if exponent_high is not None:
+                exponent = min(exponent, exponent_high)
+            if exponent_low is not None and exponent < exponent_low:
+                return None
+
+            interval_lower = max(lower, cell_lower.scaleb(exponent))
+            interval_upper = cell_upper.scaleb(exponent)
+            if upper is not None:
+                interval_upper_closed = min(upper, interval_upper)
+            else:
+                interval_upper_closed = interval_upper
+            magnitude = _pick_decimal(
+                interval_lower,
+                interval_upper_closed,
+                integer_only,
+                exclusive_upper=interval_upper,
+            )
+            if magnitude is None and integer_only:
+                next_exponent = exponent + 1
+                if exponent_high is None or next_exponent <= exponent_high:
+                    exponent = next_exponent
+                    interval_lower = max(lower, cell_lower.scaleb(exponent))
+                    interval_upper = cell_upper.scaleb(exponent)
+                    interval_upper_closed = (
+                        min(upper, interval_upper)
+                        if upper is not None
+                        else interval_upper
+                    )
+                    magnitude = _pick_decimal(
+                        interval_lower,
+                        interval_upper_closed,
+                        integer_only,
+                        exclusive_upper=interval_upper,
+                    )
+            if magnitude is None:
+                return None
+
+        mantissa_value = magnitude.scaleb(-exponent)
+        mantissa = _mantissa_text(mantissa_value, unsigned_prefix)
+        literal = ("-" if negative else "") + mantissa
+        if exponent:
+            literal += "e" + str(exponent)
+        if not literal.startswith(tail):
+            raise Unsupported(f"cannot preserve numeric prefix {tail!r} in {literal!r}")
+        return literal[len(tail) :]
+
+    def _bounded_exponent_completion(
+        self,
+        schema: dict,
+        tail: str,
+        parts: re.Match[str],
+        lower: Decimal,
+        upper: Decimal | None,
+    ) -> str | None:
+        marker = parts.start("marker")
+        mantissa_text = tail[:marker]
+        if not _NUMBER_RE.fullmatch(mantissa_text):
+            return None
+        try:
+            magnitude = abs(Decimal(mantissa_text))
+        except InvalidOperation:
+            return None
+
+        if magnitude == 0:
+            if lower > 0 or (upper is not None and upper < 0):
+                return None
+            exponent_low = exponent_high = None
+        else:
+            if upper is not None and upper <= 0:
+                return None
+            exponent_low = _smallest_scale_with_lower_at_least(magnitude, lower)
+            exponent_high = (
+                _largest_scale_with_lower_at_most(magnitude, upper)
+                if upper is not None
+                else None
+            )
+            if schema.get("type") == "integer":
+                integral_scale = -magnitude.normalize().as_tuple().exponent
+                exponent_low = max(
+                    integral_scale,
+                    exponent_low if exponent_low is not None else integral_scale,
+                )
+            if (
+                exponent_low is not None
+                and exponent_high is not None
+                and exponent_low > exponent_high
+            ):
+                return None
+
+        existing = tail[marker + 1 :]
+        completed = _choose_exponent_text(existing, exponent_low, exponent_high)
+        if completed is None:
+            return None
+        return completed[len(existing) :]
+
     def _number_ok(self, schema: dict, literal: str) -> bool:
         try:
             value = json.loads(literal)
         except json.JSONDecodeError:
             return False
-        if schema.get("type") == "integer" and not float(value).is_integer():
+        if schema.get("type") == "integer" and not (
+            isinstance(value, int) or (isinstance(value, float) and value.is_integer())
+        ):
             return False
         if "minimum" in schema and value < schema["minimum"]:
             return False
@@ -458,11 +681,7 @@ class Reference:
         if typ == "string":
             return json.dumps("a" * schema.get("minLength", 0))
         if typ in ("number", "integer"):
-            lo, hi = schema.get("minimum"), schema.get("maximum")
-            value = 0 if lo is None else int(lo) if float(lo).is_integer() else lo
-            if hi is not None and value > hi:
-                raise Unsupported(f"unsatisfiable numeric bounds {lo}..{hi}")
-            return json.dumps(value)
+            return _minimal_number(schema, integer_only=typ == "integer")
         if typ == "boolean":
             return "true"
         if typ == "null" or typ is None:
@@ -500,6 +719,212 @@ class Reference:
 
 
 # ---- helpers ----
+
+
+def _minimal_number(schema: dict, *, integer_only: bool) -> str:
+    """Build a numeric witness near zero while respecting inclusive bounds."""
+    minimum = Decimal(str(schema["minimum"])) if "minimum" in schema else None
+    maximum = Decimal(str(schema["maximum"])) if "maximum" in schema else None
+    if integer_only:
+        lower = (
+            minimum.to_integral_value(rounding=ROUND_CEILING)
+            if minimum is not None
+            else None
+        )
+        upper = (
+            maximum.to_integral_value(rounding=ROUND_FLOOR)
+            if maximum is not None
+            else None
+        )
+    else:
+        lower, upper = minimum, maximum
+    if lower is not None and upper is not None and lower > upper:
+        raise Unsupported(
+            f"unsatisfiable numeric bounds {schema.get('minimum')}..{schema.get('maximum')}"
+        )
+
+    if lower is not None and lower > 0:
+        value = lower
+    elif upper is not None and upper < 0:
+        value = upper
+    else:
+        value = Decimal(0)
+    return _decimal_text(value)
+
+
+def _magnitude_bounds(
+    schema: dict, *, negative: bool
+) -> tuple[Decimal, Decimal | None] | None:
+    """Translate signed schema bounds into inclusive non-negative magnitudes."""
+    try:
+        minimum = Decimal(str(schema["minimum"])) if "minimum" in schema else None
+        maximum = Decimal(str(schema["maximum"])) if "maximum" in schema else None
+    except InvalidOperation as exc:
+        raise Unsupported("non-decimal numeric bound") from exc
+    if any(bound is not None and not bound.is_finite() for bound in (minimum, maximum)):
+        raise Unsupported("non-finite numeric bound")
+    if minimum is not None and maximum is not None and minimum > maximum:
+        return None
+
+    zero = Decimal(0)
+    if negative:
+        if minimum is not None and minimum > zero:
+            return None
+        lower = max(zero, -maximum) if maximum is not None else zero
+        upper = -minimum if minimum is not None else None
+    else:
+        if maximum is not None and maximum < zero:
+            return None
+        lower = max(zero, minimum) if minimum is not None else zero
+        upper = maximum
+    if upper is not None and (upper < zero or lower > upper):
+        return None
+    return lower, upper
+
+
+def _pick_decimal(
+    lower: Decimal,
+    upper: Decimal | None,
+    integer_only: bool,
+    *,
+    exclusive_upper: Decimal | None = None,
+    positive: bool = False,
+) -> Decimal | None:
+    """Pick a finite decimal from an interval, respecting an optional open ceiling."""
+    if integer_only:
+        candidate = lower.to_integral_value(rounding=ROUND_CEILING)
+        if positive and candidate == 0:
+            candidate = Decimal(1)
+    elif positive and lower == 0:
+        candidate = min(Decimal(1), upper) if upper is not None else Decimal(1)
+    else:
+        candidate = lower
+    if positive and candidate <= 0:
+        return None
+    if upper is not None and candidate > upper:
+        return None
+    if exclusive_upper is not None and candidate >= exclusive_upper:
+        return None
+    return candidate
+
+
+def _smallest_scale_with_upper_above(value: Decimal, target: Decimal) -> int | None:
+    """Smallest integer scale where ``value * 10**scale > target``."""
+    if target <= 0:
+        return None
+    scale = target.adjusted() - value.adjusted()
+    while value.scaleb(scale) <= target:
+        scale += 1
+    while value.scaleb(scale - 1) > target:
+        scale -= 1
+    return scale
+
+
+def _smallest_scale_with_lower_at_least(
+    value: Decimal, target: Decimal
+) -> int | None:
+    """Smallest integer scale where ``value * 10**scale >= target``."""
+    if target <= 0:
+        return None
+    scale = target.adjusted() - value.adjusted()
+    while value.scaleb(scale) < target:
+        scale += 1
+    while value.scaleb(scale - 1) >= target:
+        scale -= 1
+    return scale
+
+
+def _largest_scale_with_lower_at_most(value: Decimal, target: Decimal) -> int:
+    """Largest integer scale where ``value * 10**scale <= target``."""
+    if target <= 0:
+        raise ValueError("positive value cannot be scaled to a non-positive ceiling")
+    scale = target.adjusted() - value.adjusted()
+    while value.scaleb(scale) > target:
+        scale -= 1
+    while value.scaleb(scale + 1) <= target:
+        scale += 1
+    return scale
+
+
+def _decimal_text(value: Decimal) -> str:
+    text = format(value, "f")
+    return "0" if text in ("-0", "-0.0") else text
+
+
+def _mantissa_text(value: Decimal, prefix: str) -> str:
+    fraction_places = len(prefix.partition(".")[2]) if "." in prefix else 0
+    if prefix.endswith("."):
+        fraction_places = 1
+    value_places = max(0, -value.as_tuple().exponent)
+    text = format(value, f".{max(fraction_places, value_places)}f")
+    if not text.startswith(prefix):
+        raise Unsupported(f"decimal {text!r} does not preserve prefix {prefix!r}")
+    return text
+
+
+def _choose_exponent_text(
+    prefix: str, lower: int | None, upper: int | None
+) -> str | None:
+    """Complete a partially written exponent with an integer inside the interval."""
+    if prefix == "":
+        if lower is not None and upper is not None and lower > upper:
+            return None
+        exponent = 0
+        if lower is not None:
+            exponent = max(exponent, lower)
+        if upper is not None:
+            exponent = min(exponent, upper)
+        return str(exponent)
+
+    sign = prefix[0] if prefix[0] in "+-" else ""
+    digits = prefix[1:] if sign else prefix
+    if sign == "-":
+        magnitude_lower = max(0, -upper) if upper is not None else 0
+        magnitude_upper = -lower if lower is not None else None
+    else:
+        magnitude_lower = max(0, lower) if lower is not None else 0
+        magnitude_upper = upper
+    if magnitude_upper is not None and (
+        magnitude_upper < 0 or magnitude_lower > magnitude_upper
+    ):
+        return None
+
+    completed_digits = _choose_prefixed_integer(
+        digits, magnitude_lower, magnitude_upper
+    )
+    if completed_digits is None:
+        return None
+    return sign + completed_digits
+
+
+def _choose_prefixed_integer(
+    prefix: str, lower: int, upper: int | None
+) -> str | None:
+    """Choose decimal digits beginning with ``prefix`` whose value is in range."""
+    if not prefix:
+        return str(lower)
+    stem = int(prefix)
+    if stem == 0:
+        candidate = lower
+        if upper is not None and candidate > upper:
+            return None
+        if candidate == 0:
+            return prefix
+        return prefix + str(candidate)
+
+    stem_text = str(stem)
+    suffix_length = max(0, len(str(lower)) - len(stem_text) - 1)
+    while (stem + 1) * 10**suffix_length - 1 < lower:
+        suffix_length += 1
+    interval_lower = stem * 10**suffix_length
+    interval_upper = (stem + 1) * 10**suffix_length - 1
+    candidate = max(lower, interval_lower)
+    if candidate > interval_upper or (upper is not None and candidate > upper):
+        return None
+    canonical = str(candidate).zfill(len(stem_text) + suffix_length)
+    if not canonical.startswith(stem_text):
+        raise Unsupported("failed to preserve exponent prefix")
+    return prefix + canonical[len(stem_text) :]
 
 
 def _assert_supported(schema: Any) -> None:
@@ -587,3 +1012,34 @@ def _escape_tail(text: str, i: int) -> int | str | None:
     if not all(d in "0123456789abcdefABCDEF" for d in digits):
         return None
     return i + 6
+
+
+def _unicode_escape_codepoint(text: str, i: int) -> int | None:
+    if text[i : i + 2] != "\\u" or i + 6 > len(text):
+        return None
+    try:
+        return int(text[i + 2 : i + 6], 16)
+    except ValueError:
+        return None
+
+
+def _low_surrogate_tail(text: str, pos: int) -> int | str | None:
+    """Consume or complete a low-surrogate escape following a high surrogate."""
+    raw = text[pos:]
+    if not raw.startswith("\\"):
+        return None
+    if len(raw) >= 6:
+        codepoint = _unicode_escape_codepoint(text, pos)
+        return pos + 6 if codepoint is not None and 0xDC00 <= codepoint <= 0xDFFF else None
+
+    target = "\\udc00"
+    if len(raw) >= 2 and raw[1].lower() != "u":
+        return None
+    digits = raw[2:]
+    if len(digits) >= 1 and digits[0].lower() != "d":
+        return None
+    if len(digits) >= 2 and digits[1].lower() not in "cdef":
+        return None
+    if any(digit not in "0123456789abcdefABCDEF" for digit in digits[2:]):
+        return None
+    return target[len(raw) :]

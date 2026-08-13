@@ -71,10 +71,11 @@ Honest accounting of what this sweep did *not* decide:
   category, along with special tokens. A byte-level reference would close this gap and
   is the single biggest coverage improvement available.
 - **Steps landing mid-character were skipped entirely**, for the same reason.
-- **Bounded numeric schemas abstain often.** An exhausted bounded completion search is
-  not a proof of non-viability, so the reference raises rather than concludes. This is
-  why `bounded_number` costs ~60 s per instance and yields lower coverage than other
-  cases.
+- **Bounded numeric schemas abstained often during this recorded sweep.** At M1, an
+  exhausted bounded completion search raised rather than guessed, which made
+  `bounded_number` cost ~60 s per instance. The reference now decides these prefixes
+  with exact decimal interval arithmetic; the counts and wall clock above remain the
+  historical M1 result.
 - **Whitespace around the document is out of scope by decision**, not by oversight. See
   the README.
 - **One engine, one tokenizer.** Nothing here says anything about llguidance, Outlines,

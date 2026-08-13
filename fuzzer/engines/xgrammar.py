@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import json
 
 import numpy as np
 import xgrammar as xgr
@@ -23,6 +24,11 @@ def _tokenizer_info(tokenizer_id: str) -> tuple[xgr.TokenizerInfo, int]:
 def _compiler(tokenizer_id: str) -> xgr.GrammarCompiler:
     info, _ = _tokenizer_info(tokenizer_id)
     return xgr.GrammarCompiler(info)
+
+
+@functools.lru_cache(maxsize=1024)
+def _compiled(tokenizer_id: str, schema_json: str) -> xgr.CompiledGrammar:
+    return _compiler(tokenizer_id).compile_json_schema(schema_json)
 
 
 def _bitmask_to_set(bitmask: np.ndarray, vocab_size: int) -> set[int]:
@@ -73,7 +79,10 @@ class XGrammarAdapter:
     def compile(self, schema: dict, tokenizer_id: str) -> XGrammarMatcher:
         info, vocab_size = _tokenizer_info(tokenizer_id)
         try:
-            compiled = _compiler(tokenizer_id).compile_json_schema(schema)
+            # Property declaration order is observable in XGrammar's default
+            # any_order=False behavior, so a cache key must preserve insertion order.
+            schema_json = json.dumps(schema, separators=(",", ":"))
+            compiled = _compiled(tokenizer_id, schema_json)
         except Exception as exc:  # xgrammar raises assorted types for bad schemas
             raise CompilationFailed(f"xgrammar rejected schema: {exc}") from exc
         return XGrammarMatcher(compiled, vocab_size, set(info.stop_token_ids or []))
