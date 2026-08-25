@@ -61,6 +61,7 @@ class UnsupportedEngine:
 
 
 def test_sweep_reports_each_property_per_engine_and_tokenizer():
+    completed_cells = []
     report = run_sweep(
         engines=[LiteralEngine()],
         tokenizer_ids=[TOKENIZER],
@@ -74,6 +75,7 @@ def test_sweep_reports_each_property_per_engine_and_tokenizer():
             completeness_max_alternatives=4,
             seed=7,
         ),
+        on_cell_complete=completed_cells.append,
     )
 
     cell = report.cells[0]
@@ -88,12 +90,28 @@ def test_sweep_reports_each_property_per_engine_and_tokenizer():
         "soundness": 0,
         "viability": 0,
     }
+    assert completed_cells == [cell]
 
     markdown = report.to_markdown()
     assert "literal" in markdown and "gpt2" in markdown
     assert "Viability lookahead depth | 4" in markdown
     assert "Soundness walks per schema | 2" in markdown
     assert "Completeness alternate tokenizations | 4" in markdown
+    assert "Completeness search-state limit | 4096" in markdown
+
+
+def test_sweep_counts_truncated_tokenization_search_as_inconclusive():
+    report = run_sweep(
+        engines=[LiteralEngine()],
+        tokenizer_ids=[TOKENIZER],
+        pairs=[(SCHEMA, INSTANCE)],
+        config=SweepConfig(
+            completeness_max_search_states=1,
+            soundness_walks=1,
+        ),
+    )
+
+    assert report.cells[0].completeness.inconclusive_checks == 1
 
 
 def test_sweep_labels_context_sensitive_tokenizers():

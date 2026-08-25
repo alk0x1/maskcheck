@@ -31,6 +31,7 @@ reproduce on the latest stable `0.2.5` wheel and on post-compiler-rewrite `main`
 | [004](findings/004_xgrammar_property_order_default.py) | Only one property ordering reachable by default | Medium | Documented knob |
 | [005](findings/005_xgrammar_escaped_fixed_strings.py) | `\uXXXX` spellings of keys, enums and consts unreachable | Medium | Unambiguous |
 | [006](findings/006_xgrammar_bounded_number_exponents.py) | Numeric bounds make exponent spellings unreachable | Low | Unambiguous |
+| [007](findings/007_xgrammar_constrained_string_characters.py) | Constrained strings can complete with invalid JSON text | High | Unambiguous |
 
 M3 has now reproduced 006 independently in **llguidance 1.8.0**: `1e1` is reachable
 for an unbounded number and rejected as soon as `minimum: 10` is added. This is one
@@ -41,6 +42,11 @@ M3 also found a soundness disagreement in **outlines-core 0.2.14**. Schemas cont
 standard numeric value constraints such as `minimum` or `maximum` compile successfully,
 but the generated regex is identical to the unbounded type and accepts out-of-range
 values. This is silent constraint omission, not a compilation or capability gap.
+
+M3 finding 007 is character-level and tokenizer-independent. Length-bounded strings
+and a one-character pattern can complete with text rejected by the strict JSON parser.
+The same length-bound behavior occurs in property names. Both `accept_string` and
+three-token matching reproduce it with a custom vocabulary.
 
 All six are character-level, so they are tokenizer-independent. Full sweep numbers are
 in [reports/m1_xgrammar_gpt2.md](reports/m1_xgrammar_gpt2.md): 58 instances, full

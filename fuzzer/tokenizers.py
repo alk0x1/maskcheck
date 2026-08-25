@@ -8,6 +8,7 @@ Keep the short ids stable: they are quoted verbatim in reproducers.
 from __future__ import annotations
 
 import functools
+from dataclasses import dataclass
 
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
@@ -25,6 +26,13 @@ REVISIONS: dict[str, str] = {
     "mistral": "27d67f1b5f57dc0953326b2601d68371d40ea8da",
     "llama3": "72bff9ee09897a16b3b4b2b9995fecb0bfa7dbe6",
 }
+
+
+@dataclass(frozen=True)
+class TokenizationEnumeration:
+    tokenizations: tuple[tuple[int, ...], ...]
+    states_examined: int
+    truncated: bool
 
 
 class Tokenizer:
@@ -78,34 +86,62 @@ class Tokenizer:
         )
         return not combined.startswith(context) or combined[len(context) :] != text
 
-    def tokenizations(self, text: str, max_alternatives: int = 8) -> list[list[int]]:
+    def tokenizations(
+        self,
+        text: str,
+        max_alternatives: int = 8,
+        max_search_states: int = 4096,
+    ) -> list[list[int]]:
         """Canonical encoding followed by bounded exact-roundtrip alternatives.
 
         Alternatives use tokens that decode to complete text in isolation. Byte
         fragments remain outside this string-level enumeration and are accounted for
         separately by the differential driver.
         """
+        result = self.enumerate_tokenizations(
+            text,
+            max_alternatives=max_alternatives,
+            max_search_states=max_search_states,
+        )
+        return [list(path) for path in result.tokenizations]
+
+    @functools.lru_cache(maxsize=2048)
+    def enumerate_tokenizations(
+        self,
+        text: str,
+        max_alternatives: int = 8,
+        max_search_states: int = 4096,
+    ) -> TokenizationEnumeration:
+        """Enumerate alternatives within an explicit search-state budget."""
         if max_alternatives < 0:
             raise ValueError("max_alternatives must be non-negative")
+        if max_search_states < 1:
+            raise ValueError("max_search_states must be positive")
         canonical = self.encode(text)
-        output = [canonical]
+        output = [tuple(canonical)]
         seen = {tuple(canonical)}
         if max_alternatives == 0 or not text:
-            return output
+            return TokenizationEnumeration(tuple(output), 0, False)
 
         stack: list[tuple[int, tuple[int, ...]]] = [(0, ())]
+        states_examined = 0
         while stack and len(output) <= max_alternatives:
+            if states_examined >= max_search_states:
+                return TokenizationEnumeration(
+                    tuple(output), states_examined, truncated=True
+                )
             position, path = stack.pop()
+            states_examined += 1
             if position == len(text):
                 if path not in seen and self.decode(list(path)) == text:
                     seen.add(path)
-                    output.append(list(path))
+                    output.append(path)
                 continue
             choices = self._tokens_by_initial.get(text[position], ())
             for piece, token_id in reversed(choices):
                 if text.startswith(piece, position):
                     stack.append((position + len(piece), path + (token_id,)))
-        return output
+        return TokenizationEnumeration(tuple(output), states_examined, truncated=False)
 
     @functools.cached_property
     def token_texts(self) -> list[str | None]:

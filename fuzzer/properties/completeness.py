@@ -32,6 +32,7 @@ class CompletenessResult:
 class MultiTokenizationResult:
     canonical: CompletenessResult
     alternatives: list[CompletenessResult]
+    enumeration_truncated: bool = False
 
     @property
     def all_results(self) -> list[CompletenessResult]:
@@ -137,10 +138,15 @@ def check_completeness_variants(
     tokenizer_id: str,
     *,
     max_alternatives: int = 8,
+    max_search_states: int = 4096,
 ) -> MultiTokenizationResult:
     """Check canonical and bounded alternate exact-roundtrip tokenizations."""
     tok = load_tokenizer(tokenizer_id)
-    tokenizations = tok.tokenizations(instance, max_alternatives=max_alternatives)
+    enumeration = tok.enumerate_tokenizations(
+        instance,
+        max_alternatives=max_alternatives,
+        max_search_states=max_search_states,
+    )
     results = [
         check_completeness(
             engine,
@@ -149,6 +155,10 @@ def check_completeness_variants(
             tokenizer_id,
             token_ids=token_ids,
         )
-        for token_ids in tokenizations
+        for token_ids in enumeration.tokenizations
     ]
-    return MultiTokenizationResult(canonical=results[0], alternatives=results[1:])
+    return MultiTokenizationResult(
+        canonical=results[0],
+        alternatives=results[1:],
+        enumeration_truncated=enumeration.truncated,
+    )

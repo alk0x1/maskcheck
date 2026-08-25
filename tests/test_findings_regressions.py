@@ -106,3 +106,59 @@ def test_006_bounds_are_still_enforced_soundly(literal):
     bounded = {"type": "number", "minimum": 10, "maximum": 20}
     assert not valid(bounded, literal)
     assert not accepts(bounded, literal)
+
+
+def accepts_c0_with_custom_vocabulary(schema, codepoint, *, property_name=False):
+    control = chr(codepoint)
+    if property_name:
+        pieces = ['{"', control, '":null}']
+    else:
+        pieces = ['"', control, '"']
+    text = "".join(pieces)
+    compiler = xgr.GrammarCompiler(xgr.TokenizerInfo(pieces, vocab_size=3))
+    compiled = compiler.compile_json_schema(schema)
+
+    string_matcher = xgr.GrammarMatcher(compiled)
+    string_accepted = (
+        string_matcher.accept_string(text) and string_matcher.is_completed()
+    )
+
+    token_matcher = xgr.GrammarMatcher(compiled)
+    token_accepted = all(token_matcher.accept_token(token_id) for token_id in range(3))
+    token_accepted = token_accepted and token_matcher.is_completed()
+    return text, string_accepted, token_accepted
+
+
+@pytest.mark.parametrize(
+    "codepoint", range(0x20), ids=lambda value: f"U+{value:04X}"
+)
+def test_007_constrained_strings_preserve_observed_c0_acceptance(codepoint):
+    """Pin the current violation so an upstream correction makes this test fail."""
+    value_cases = [
+        ({"type": "string"}, False),
+        ({"type": "string", "minLength": 1, "maxLength": 1}, codepoint not in {10, 13}),
+        ({"type": "string", "pattern": "^.$"}, True),
+        ({"type": "string", "format": "email"}, False),
+    ]
+    for schema, expected in value_cases:
+        text, by_string, by_token = accepts_c0_with_custom_vocabulary(
+            schema, codepoint
+        )
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(text)
+        assert by_string is expected
+        assert by_token is expected
+
+    key_schema = {
+        "type": "object",
+        "propertyNames": {"minLength": 1, "maxLength": 1},
+        "additionalProperties": {"type": "null"},
+    }
+    text, by_string, by_token = accepts_c0_with_custom_vocabulary(
+        key_schema, codepoint, property_name=True
+    )
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(text)
+    expected = codepoint not in {10, 13}
+    assert by_string is expected
+    assert by_token is expected

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from collections.abc import Callable
 
 from hypothesis import given, seed as hypothesis_seed, settings
 
@@ -20,6 +21,7 @@ from fuzzer.tokenizers import load_tokenizer
 @dataclass(frozen=True)
 class SweepConfig:
     completeness_max_alternatives: int = 8
+    completeness_max_search_states: int = 4096
     soundness_walks: int = 100
     soundness_max_steps: int = 64
     viability_lookahead_depth: int = 4
@@ -85,6 +87,10 @@ class SweepReport:
             (
                 "| Completeness alternate tokenizations | "
                 f"{self.config.completeness_max_alternatives} |"
+            ),
+            (
+                "| Completeness search-state limit | "
+                f"{self.config.completeness_max_search_states} |"
             ),
             f"| Soundness walks per schema | {self.config.soundness_walks} |",
             f"| Soundness maximum tokens | {self.config.soundness_max_steps} |",
@@ -160,6 +166,7 @@ def run_sweep(
     tokenizer_ids: list[str],
     pairs: list[tuple[dict, str]],
     config: SweepConfig | None = None,
+    on_cell_complete: Callable[[SweepCell], None] | None = None,
 ) -> SweepReport:
     """Run all three M3 properties over an engine/tokenizer matrix."""
     config = config or SweepConfig()
@@ -202,6 +209,8 @@ def run_sweep(
                     replace(config, seed=config.seed + index),
                 )
             cells.append(cell)
+            if on_cell_complete is not None:
+                on_cell_complete(cell)
 
     return SweepReport(config=config, pairs_requested=len(pairs), cells=cells)
 
@@ -225,6 +234,7 @@ def _run_completeness(cell, engine, schema, instance, tokenizer_id, config):
             instance,
             tokenizer_id,
             max_alternatives=config.completeness_max_alternatives,
+            max_search_states=config.completeness_max_search_states,
         )
     except (CapabilityGap, Unsupported) as exc:
         _gap(stats, exc, compilation=False)
@@ -238,6 +248,7 @@ def _run_completeness(cell, engine, schema, instance, tokenizer_id, config):
     stats.canonical_failures_with_accepted_alternative += int(
         result.canonical_failed_with_accepted_alternative
     )
+    stats.inconclusive_checks += int(result.enumeration_truncated)
     stats.violations.extend(result.canonical.violations)
 
 
