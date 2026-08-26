@@ -76,10 +76,118 @@ schema with a non-ASCII key or enum value.
 
 Not yet filed upstream (M4).
 
-## Running it
+## Checking your own schemas
+
+Install the harness and one engine, from a clone of this repository. The engines are
+optional extras, so testing one does not install the other two:
 
 ```bash
-uv sync
+pip install '.[xgrammar]'      # or [llguidance], [outlines], or [engines] for all three
+```
+
+Naming an engine that is not installed reports what is missing and how to get it. It
+does not fail with an import error.
+
+Point it at your schemas. `--schemas` takes a file, a directory searched for `*.json`,
+or a glob. `--tokenizer` takes any Hugging Face tokenizer id, or one of the four short
+ids pinned by this repo (`gpt2`, `qwen2.5`, `mistral`, `llama3`).
+
+```bash
+mkdir -p schemas-demo
+cat > schemas-demo/order.json <<'JSON'
+{
+  "type": "object",
+  "properties": {
+    "sku": {"type": "string"},
+    "quantity": {"type": "integer", "minimum": 1}
+  },
+  "required": ["sku", "quantity"],
+  "additionalProperties": false
+}
+JSON
+
+maskcheck verify --engine xgrammar --tokenizer gpt2 --schemas schemas-demo \
+  --instances 6 --walks 20 --max-steps 200
+```
+
+Completeness generates valid documents for each schema and requires the engine to
+allow every token of them. Soundness random-walks the engine's own allowed tokens and
+requires every completed document to validate. The run exits non-zero when a violation
+is found, so it drops into CI unchanged. Use `--fail-on` to choose which properties are
+fatal (`--fail-on completeness`, or `--fail-on none` to report without failing).
+
+Output from the run above, verbatim:
+
+```text
+maskcheck verify
+  engine            xgrammar 0.2.4
+  tokenizer         gpt2
+  schemas           1 from schemas-demo
+  fatal properties  completeness, soundness
+
+  schemas checked   1
+  schemas skipped   0
+  completeness      6 checks, 0 skipped, 5 violations
+  soundness         4 checks, 0 skipped, 0 violations, 16 inconclusive
+
+  Inconclusive results ran but could not be judged: the walk hit the
+  token budget before completing a document, or its tokens split a
+  multi-byte character so the output is not text. Raise --max-steps to
+  convert the first kind into real checks.
+
+5 violations from 2 distinct causes.
+
+==============================================================================
+Cause 1 of 2: completeness violation
+==============================================================================
+  property              completeness
+  reason                valid instance rejected: token not in allowed mask
+  engine                xgrammar 0.2.4
+  tokenizer             gpt2
+  schema source         schemas-demo/order.json
+  occurrences           4, all from this schema
+  step index            1
+  prefix so far         "{\""
+  blocked token         id=40972 text="quant"
+  witness document      "{\"quantity\":178.0,\"sku\":\"\\\\\\t\"}"
+  schema                {"type": "object", "properties": {"sku": {"type": "string"}, "quantity": {"type": "integer", "minimum": 1}}, "required": ["sku", "quantity"], "additionalProperties": false}
+
+==============================================================================
+Cause 2 of 2: completeness violation
+==============================================================================
+  property              completeness
+  reason                valid instance rejected: token not in allowed mask
+  engine                xgrammar 0.2.4
+  tokenizer             gpt2
+  schema source         schemas-demo/order.json
+  step index            24
+  prefix so far         "{\"sku\":\"é日\\t日a\\t\\\"🙂\\\\\\\"\",\"quantity\":480"
+  blocked token         id=68 text="e"
+  witness document      "{\"sku\":\"é日\\t日a\\t\\\"🙂\\\\\\\"\",\"quantity\":480e0}"
+  schema                {"type": "object", "properties": {"sku": {"type": "string"}, "quantity": {"type": "integer", "minimum": 1}}, "required": ["sku", "quantity"], "additionalProperties": false}
+```
+
+That is two real bugs in XGrammar 0.2.4, not harness noise. The first block says the
+engine refuses `quantity` as the opening key: property order is significant by default,
+so a document that lists the keys in a different order than the schema declares them
+cannot be produced at all. The second says it refuses `e` after `480`, rejecting
+exponent notation for a value JSON Schema counts as an integer. Both are silent in
+production: the model never emits those documents and nothing reports an error.
+
+Every block is self-contained on purpose. It names the property, the engine version,
+the tokenizer, the step, the prefix accepted so far, the token involved, and the
+witness document, so it can be pasted into an issue without this repository. Characters
+below U+0020 are always written as `<U+00XX>` rather than emitted raw.
+
+Repeated violations are grouped, one block per distinct cause, so a schema that fails
+the same way forty times is reported once with a count.
+
+## Running the harness itself
+
+The test suite drives all three engines, so it needs all three installed.
+
+```bash
+uv sync --extra engines
 uv run pytest                       # the harness's own tests
 uv run pytest tests/test_m2_generators.py  # 10k generated-pair exit verifier
 uv run python findings/003_*.py     # any single reproducer, standalone
@@ -91,6 +199,7 @@ uv run python findings/003_*.py     # any single reproducer, standalone
 fuzzer/
   engines/        one adapter per engine behind a uniform interface
     base.py       EngineAdapter / Matcher protocols, CapabilityGap
+    registry.py   engine lookup by name, optional imports, missing reported
     xgrammar.py
   generators/
     schemas.py    bounded Hypothesis strategy for supported JSON Schemas
@@ -105,6 +214,8 @@ fuzzer/
   shrink.py       predicate-driven failure discovery and shrinking
   tokenizers.py   tokenizer registry and encode/decode conventions
   findings.py     Violation record
+  report.py       one violation rendered as a self-contained block
+  cli.py          maskcheck, the command over your own schemas
 findings/         standalone reproducers, one per distinct root cause
 ```
 
