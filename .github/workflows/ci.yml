@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    name: Test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      # The four pinned tokenizers come from the Hugging Face Hub. All four are public,
+      # so no token is needed, but caching them keeps the run off the network.
+      - name: Cache tokenizers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ hashFiles('fuzzer/tokenizers.py') }}
+      # The suite drives all three engines, so it needs all three installed.
+      - run: uv sync --extra engines
+      - run: uv run pytest -q
+
+  packaging:
+    name: Install contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Cache tokenizers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ hashFiles('fuzzer/tokenizers.py') }}
+
+      - name: Build the wheel
+        run: uv build --wheel -o dist
+
+      - name: Install with no engine extras
+        run: |
+          uv venv bare
+          VIRTUAL_ENV=bare uv pip install dist/*.whl
+
+      # Installing the tool must not drag in an engine. That is the whole point of the
+      # extras, and it is undone by moving a single dependency back to the base list.
+      - name: No engine is installed by default
+        run: |
+          for package in xgrammar llguidance outlines_core torch; do
+            if VIRTUAL_ENV=bare uv pip show "$package" >/dev/null 2>&1; then
+              echo "$package was installed without asking for its extra"
+              exit 1
+            fi
+          done
+
+      # An engine that is absent has to be reported. A traceback here means someone
+      # imported an adapter at module scope.
+      - name: An absent engine is reported, not raised
+        run: |
+          echo '{"type":"boolean"}' > flag.json
+          set +e
+          output=$(./bare/bin/maskcheck verify --engine xgrammar --tokenizer gpt2 --schemas flag.json 2>&1)
+          code=$?
+          set -e
+          echo "$output"
+          if [ "$code" -ne 2 ]; then
+            echo "expected exit 2 for a missing engine, got $code"
+            exit 1
+          fi
+          case "$output" in
+            *"pip install"*) ;;
+            *) echo "the missing engine was reported without an install hint"; exit 1 ;;
+          esac
+
+      # And one extra has to be enough to actually check a schema.
+      - name: One engine extra is enough to run
+        run: |
+          uv venv one
+          VIRTUAL_ENV=one uv pip install "conformance-fuzzer[outlines] @ file://$PWD/$(ls dist/*.whl)"
+          ./one/bin/maskcheck verify --engine outlines --tokenizer gpt2 --schemas flag.json

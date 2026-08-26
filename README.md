@@ -273,6 +273,10 @@ distinct failures.
   [reports/m3_checkpoint_2026-08-24.md](reports/m3_checkpoint_2026-08-24.md).
 - **M4, disclosure.** Not started.
 
+Alongside the milestones, the harness is now installable and runs over schemas a caller
+supplies rather than only over generated ones. See
+[Checking your own schemas](#checking-your-own-schemas).
+
 ## Scope
 
 In: XGrammar and llguidance (Outlines if cheap), JSON Schema only, at least four
