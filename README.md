@@ -46,7 +46,11 @@ values. This is silent constraint omission, not a compilation or capability gap.
 M3 finding 007 is character-level and tokenizer-independent. Length-bounded strings
 and a one-character pattern can complete with text rejected by the strict JSON parser.
 The same length-bound behavior occurs in property names. Both `accept_string` and
-three-token matching reproduce it with a custom vocabulary.
+three-token matching reproduce it with a custom vocabulary. The complete grid is
+verified on XGrammar 0.2.4 and 0.2.5. The length-bound case is already covered by
+[XGrammar issue #800](https://github.com/mlc-ai/xgrammar/issues/800), with open fixes
+in [PR #822](https://github.com/mlc-ai/xgrammar/pull/822) and
+[PR #828](https://github.com/mlc-ai/xgrammar/pull/828).
 
 All six are character-level, so they are tokenizer-independent. Full sweep numbers are
 in [reports/m1_xgrammar_gpt2.md](reports/m1_xgrammar_gpt2.md): 58 instances, full

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from importlib.metadata import version
 from typing import Iterable
 
 import xgrammar as xgr
@@ -190,6 +191,26 @@ def print_table(
         )
     print()
 
+    print("Excluded labeled code points by column:\n")
+    print("| Column | accept_string | accept_token |")
+    print("|---|---|---|")
+    for case in cases:
+        string_points = [
+            f"U+{codepoint:04X}"
+            for codepoint, row in results.items()
+            if row[case.label].accept_string is False
+        ]
+        token_points = [
+            f"U+{codepoint:04X}"
+            for codepoint, row in results.items()
+            if row[case.label].accept_token is False
+        ]
+        print(
+            f"| {case.label} | {', '.join(string_points) or 'none'} | "
+            f"{', '.join(token_points) or 'none'} |"
+        )
+    print()
+
     errors = {
         (case.label, outcome.error)
         for row in results.values()
@@ -243,6 +264,9 @@ def main() -> None:
 
     print("# XGrammar raw C0 constrained-string characterization\n")
     print(f"- process id: {os.getpid()}")
+    print(f"- xgrammar version: {version('xgrammar')}")
+    if source_ref := os.environ.get("XGRAMMAR_SOURCE_REF"):
+        print(f"- xgrammar source ref: {source_ref}")
     print(f"- registered tokenizers loaded once at startup: {', '.join(REGISTRY)}")
     print("- cell notation: `accept_string/accept_token`, `A` accepted, `R` rejected")
     print("- `E/E` means schema compilation failed and is listed below its table")

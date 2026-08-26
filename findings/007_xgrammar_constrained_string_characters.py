@@ -4,7 +4,7 @@ Length bounds reproduce for string values and property names. A one-character
 pattern reproduces for string values. The behavior appears through both matcher
 interfaces and with a three-entry vocabulary, so no external tokenizer is needed.
 
-Environment: xgrammar 0.2.4, Python 3.12, macOS arm64.
+Environment: xgrammar 0.2.4 and 0.2.5, macOS arm64.
 Run: python 007_xgrammar_constrained_string_characters.py
 """
 
