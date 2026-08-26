@@ -157,7 +157,9 @@ distinct failures.
   [reports/m2_generators.md](reports/m2_generators.md).
 - **M3, the sweep.** In progress. All three engines and all four tokenizers are wired;
   the three property drivers pass their end-to-end contract tests. The long matrix run
-  and root-cause classification remain.
+  remains. The current verified state, classified pilot, limitations, and proposed
+  deliverables are in
+  [reports/m3_checkpoint_2026-08-24.md](reports/m3_checkpoint_2026-08-24.md).
 - **M4, disclosure.** Not started.
 
 ## Scope
