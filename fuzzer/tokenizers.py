@@ -20,7 +20,7 @@ REGISTRY: dict[str, str] = {
     "llama3": "Xenova/llama3-tokenizer",
 }
 
-REVISIONS: dict[str, str] = {
+REVISIONS: dict[str, str | None] = {
     "gpt2": "607a30d783dfa663caf39e06633721c8d4cfcd7e",
     "qwen2.5": "7ae557604adf67be50417f59c2c2f167def9a775",
     "mistral": "27d67f1b5f57dc0953326b2601d68371d40ea8da",
@@ -180,16 +180,40 @@ class Tokenizer:
         }
 
 
+# Tokenizers named by a caller rather than pinned above, keyed by repo id. Kept apart
+# from REGISTRY on purpose: that set is a published contract, quoted verbatim in every
+# reproducer, and a run against someone else's tokenizer must not appear to extend it.
+_EXTERNAL: dict[str, str | None] = {}
+
+
+def repo_for(short_id: str) -> tuple[str, str | None]:
+    """The Hugging Face repo and revision behind a tokenizer id."""
+    if short_id in REGISTRY:
+        return REGISTRY[short_id], REVISIONS[short_id]
+    if short_id in _EXTERNAL:
+        return short_id, _EXTERNAL[short_id]
+    raise KeyError(
+        f"unknown tokenizer {short_id!r}; registered: {sorted(REGISTRY)}"
+    )
+
+
 @functools.lru_cache(maxsize=None)
 def load_tokenizer(short_id: str) -> Tokenizer:
     """Load a registered tokenizer. Cached: loading is slow and callers ask often."""
-    try:
-        repo = REGISTRY[short_id]
-    except KeyError:
-        raise KeyError(
-            f"unknown tokenizer {short_id!r}; registered: {sorted(REGISTRY)}"
-        ) from None
-    return Tokenizer(
-        short_id,
-        AutoTokenizer.from_pretrained(repo, revision=REVISIONS[short_id]),
-    )
+    repo, revision = repo_for(short_id)
+    return Tokenizer(short_id, AutoTokenizer.from_pretrained(repo, revision=revision))
+
+
+def resolve_tokenizer_id(name: str, revision: str | None = None) -> str:
+    """Return the tokenizer id for a pinned short id or a Hugging Face repo id.
+
+    The short ids above are pinned to a revision because they are quoted verbatim in
+    reproducers and must not drift. Someone testing their own deployment needs their
+    own tokenizer, which will not be one of them, so an unrecognised name is taken as
+    a repo id for the Hub to resolve. Such an entry is unpinned unless ``revision`` is
+    given, and a finding produced with one is only as reproducible as that repo.
+    """
+    if name in REGISTRY:
+        return name
+    _EXTERNAL.setdefault(name, revision)
+    return name

@@ -1,17 +1,31 @@
 [project]
 name = "conformance-fuzzer"
-version = "0.1.0"
+version = "0.2.0"
 description = "Differential conformance fuzzer for constrained-decoding engines"
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "xgrammar==0.2.4",
     "transformers>=4.44",
-    "torch>=2.4",
     "jsonschema>=4.23",
     "hypothesis>=6.0",
-    "llguidance==1.8.0",
-    "outlines-core==0.2.14",
 ]
+
+# One extra per engine. The engines are heavy and mutually independent, so testing
+# one must not require installing the other two: xgrammar pulls in torch, and
+# llguidance and outlines-core are compiled extensions with their own platform
+# support. A missing engine is reported by the CLI, not raised as an ImportError.
+[project.optional-dependencies]
+xgrammar = ["xgrammar==0.2.4", "torch>=2.4", "numpy>=1.26"]
+llguidance = ["llguidance==1.8.0", "numpy>=1.26"]
+outlines = ["outlines-core==0.2.14"]
+engines = [
+    "conformance-fuzzer[xgrammar]",
+    "conformance-fuzzer[llguidance]",
+    "conformance-fuzzer[outlines]",
+]
+
+[project.scripts]
+maskcheck = "fuzzer.cli:main"
 
 [dependency-groups]
 dev = [

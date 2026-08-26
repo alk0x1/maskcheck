@@ -198,15 +198,32 @@ wheels = [
 
 [[package]]
 name = "conformance-fuzzer"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "hypothesis" },
     { name = "jsonschema" },
+    { name = "transformers" },
+]
+
+[package.optional-dependencies]
+engines = [
     { name = "llguidance" },
+    { name = "numpy" },
     { name = "outlines-core" },
     { name = "torch" },
-    { name = "transformers" },
+    { name = "xgrammar" },
+]
+llguidance = [
+    { name = "llguidance" },
+    { name = "numpy" },
+]
+outlines = [
+    { name = "outlines-core" },
+]
+xgrammar = [
+    { name = "numpy" },
+    { name = "torch" },
     { name = "xgrammar" },
 ]
 
@@ -217,14 +234,20 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "conformance-fuzzer", extras = ["llguidance"], marker = "extra == 'engines'" },
+    { name = "conformance-fuzzer", extras = ["outlines"], marker = "extra == 'engines'" },
+    { name = "conformance-fuzzer", extras = ["xgrammar"], marker = "extra == 'engines'" },
     { name = "hypothesis", specifier = ">=6.0" },
     { name = "jsonschema", specifier = ">=4.23" },
-    { name = "llguidance", specifier = "==1.8.0" },
-    { name = "outlines-core", specifier = "==0.2.14" },
-    { name = "torch", specifier = ">=2.4" },
+    { name = "llguidance", marker = "extra == 'llguidance'", specifier = "==1.8.0" },
+    { name = "numpy", marker = "extra == 'llguidance'", specifier = ">=1.26" },
+    { name = "numpy", marker = "extra == 'xgrammar'", specifier = ">=1.26" },
+    { name = "outlines-core", marker = "extra == 'outlines'", specifier = "==0.2.14" },
+    { name = "torch", marker = "extra == 'xgrammar'", specifier = ">=2.4" },
     { name = "transformers", specifier = ">=4.44" },
-    { name = "xgrammar", specifier = "==0.2.4" },
+    { name = "xgrammar", marker = "extra == 'xgrammar'", specifier = "==0.2.4" },
 ]
+provides-extras = ["xgrammar", "llguidance", "outlines", "engines"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.3" }]

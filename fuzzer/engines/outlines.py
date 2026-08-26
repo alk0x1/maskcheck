@@ -9,13 +9,13 @@ from outlines_core import Guide, Index, Vocabulary
 from outlines_core.json_schema import build_regex_from_schema
 
 from fuzzer.engines.base import CapabilityGap, CompilationFailed
-from fuzzer.tokenizers import REGISTRY, load_tokenizer
+from fuzzer.tokenizers import load_tokenizer, repo_for
 
 
 @functools.lru_cache(maxsize=None)
 def _vocabulary(tokenizer_id: str) -> Vocabulary:
     try:
-        return Vocabulary.from_pretrained(REGISTRY[tokenizer_id])
+        return Vocabulary.from_pretrained(repo_for(tokenizer_id)[0])
     except Exception as exc:
         raise CapabilityGap(
             f"outlines could not load tokenizer {tokenizer_id}: {exc}"
