@@ -286,3 +286,8 @@ Out: performance measurement, regex and full CFG constraints, formal proof, buil
 competing engine. Bugs found in target engines are reported, not fixed here.
 
 A clean report is a valid result and ends the project at M3.
+
+## License
+
+Apache 2.0. See [LICENSE](LICENSE). For reference, the engines under test are Apache
+2.0 (XGrammar, outlines-core) and MIT (llguidance).

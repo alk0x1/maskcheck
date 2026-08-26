@@ -4,6 +4,8 @@ version = "0.2.0"
 description = "Differential conformance fuzzer for constrained-decoding engines"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 dependencies = [
     "transformers>=4.44",
     "jsonschema>=4.23",
