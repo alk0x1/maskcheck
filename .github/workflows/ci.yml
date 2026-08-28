@@ -7,7 +7,12 @@ on:
 jobs:
   tests:
     name: Test suite
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest. The pinned xgrammar 0.2.4 publishes no Linux x86_64 wheel for
+    # CPython 3.12; its x86_64 Linux builds stop at 3.11. On 3.12 it ships macOS and
+    # Linux aarch64 only, so the suite cannot install on an x86_64 runner. This also
+    # matches the platform every finding was recorded on. ubuntu-24.04-arm works too
+    # and costs fewer minutes, if the account has ARM runners.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
