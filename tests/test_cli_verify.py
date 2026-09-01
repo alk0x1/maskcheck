@@ -110,8 +110,9 @@ def test_missing_engine_is_reported_with_an_install_hint(monkeypatch):
         extra="xgrammar",
     )
     monkeypatch.setitem(registry.SPECS, "xgrammar", broken)
-    with pytest.raises(registry.EngineUnavailable, match=r"pip install .*\[xgrammar\]"):
+    with pytest.raises(registry.EngineUnavailable, match=r"pip install .*\[xgrammar\]") as error:
         registry.load_engine("xgrammar")
+    assert "maskcheck[xgrammar]" in str(error.value)
     assert registry.availability()["xgrammar"] is None
 
 

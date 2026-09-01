@@ -113,7 +113,7 @@ def load_engine(name: str):
     except Exception as exc:
         raise EngineUnavailable(
             f"engine {name!r} is not usable here: {exc}\n"
-            f"Install it with: pip install 'conformance-fuzzer[{spec.extra}]'\n"
+            f"Install it with: pip install 'maskcheck[{spec.extra}]'\n"
             f"Engines in this environment:\n{describe_availability()}"
         ) from exc
     return getattr(module, spec.adapter)()

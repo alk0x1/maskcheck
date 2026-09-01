@@ -8,6 +8,12 @@ The bet: these engines are heavily optimized for speed and validated by testing,
 proof. The translation from a character-level grammar to a token-level automaton is
 where the bugs should live, and nobody is systematically hunting them across tokenizers.
 
+**Snapshot, 2026-09-01:** eight distinct conformance findings across XGrammar,
+llguidance, and Outlines. They cover XGrammar 0.2.3, 0.2.4, and 0.2.5; llguidance
+1.8.0; and outlines-core 0.2.14, with the XGrammar findings also checked on the current
+`main` commit. Seven findings are in XGrammar; one independent soundness finding is in
+Outlines; and XGrammar finding 006 also reproduces in llguidance.
+
 ## The three properties
 
 | Property | Statement | Failure symptom |

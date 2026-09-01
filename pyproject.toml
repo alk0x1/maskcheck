@@ -1,7 +1,7 @@
 [project]
-name = "conformance-fuzzer"
+name = "maskcheck"
 version = "0.2.0"
-description = "Differential conformance fuzzer for constrained-decoding engines"
+description = "Witness-producing conformance checker for constrained-decoding engines"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
@@ -21,9 +21,9 @@ xgrammar = ["xgrammar==0.2.4", "torch>=2.4", "numpy>=1.26"]
 llguidance = ["llguidance==1.8.0", "numpy>=1.26"]
 outlines = ["outlines-core==0.2.14"]
 engines = [
-    "conformance-fuzzer[xgrammar]",
-    "conformance-fuzzer[llguidance]",
-    "conformance-fuzzer[outlines]",
+    "maskcheck[xgrammar]",
+    "maskcheck[llguidance]",
+    "maskcheck[outlines]",
 ]
 
 [project.scripts]

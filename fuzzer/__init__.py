@@ -1,1 +1,1 @@
-"""Conformance fuzzer for constrained-decoding engines."""
+"""Witness-producing conformance checks for constrained-decoding engines."""
